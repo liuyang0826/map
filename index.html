@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+      .mark {
+        background: red;
+        transform: translate(-50%, -50%);
+      }
+      .actions {
+        position: absolute;
+        bottom: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        background: #fff;
+        z-index: 100;
+      }
+      .actions > div {
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      .active {
+        color: red;
+      }
+    </style>
+  </head>
+  <body>
+    <script src="https://cdn.bootcdn.net/ajax/libs/vue/3.2.47/vue.global.js"></script>
+    <div id="root" style="overflow: hidden; position: relative"></div>
+    <script>
+      function loadImage(src) {
+        return new Promise((resolve, reject) => {
+          const image = new Image();
+          image.src = src;
+          image.onload = () => {
+            resolve(image);
+          };
+          image.onerror = () => {
+            reject();
+          };
+        });
+      }
+
+      function useTransitionValue(defaultValue) {
+        const valueRef = Vue.ref(defaultValue);
+        const transition = createTransition();
+        return {
+          valueRef,
+          transitionTo(value) {
+            transition(valueRef.value, value, 400, value => {
+              valueRef.value = value;
+            });
+          },
+        };
+      }
+
+      function quadraticInOut(k) {
+        if ((k *= 2) < 1) {
+          return 0.5 * k * k;
+        }
+        return -0.5 * (--k * (k - 2) - 1);
+      }
+
+      function createTransition() {
+        let timer = null;
+        return (from, to, duration, set) => {
+          cancelAnimationFrame(timer);
+          const startTime = Date.now();
+          const target = to - from;
+          const fn = (k = 0) => {
+            set(from + target * quadraticInOut(k));
+            if (k < 1) {
+              timer = requestAnimationFrame(() => {
+                fn(Math.min(1, (Date.now() - startTime) / duration));
+              });
+            }
+          };
+          fn();
+        };
+      }
+      const app = Vue.createApp(
+        Vue.defineComponent({
+          setup() {
+            const dpr = window.devicePixelRatio;
+
+            const imageWidth = 4224;
+            const imageHeight = 2524;
+            const canvasRef = Vue.ref();
+            const ctxRef = Vue.computed(() => {
+              const canvas = canvasRef.value;
+              if (!canvas) return;
+              canvas.width = innerWidth * dpr;
+              canvas.height = innerHeight * dpr;
+              const ctx = canvas.getContext('2d');
+              ctx.scale(dpr, dpr);
+              return ctx;
+            });
+
+            const offsetCanvas = document.createElement('canvas');
+            offsetCanvas.width = imageWidth;
+            offsetCanvas.height = imageHeight;
+            const offsetCtx = offsetCanvas.getContext('2d');
+
+            const maxScale =
+              imageWidth / imageHeight > innerWidth / innerHeight ? imageHeight / innerHeight : imageWidth / innerWidth;
+
+            const { valueRef: scaleRef, transitionTo: scaleTo } = useTransitionValue(maxScale * 0.5);
+            const { valueRef: offsetXRef, transitionTo: offsetXTo } = useTransitionValue(
+              (imageWidth - innerWidth * scaleRef.value) / 2
+            );
+            const { valueRef: offsetYRef, transitionTo: offsetYTo } = useTransitionValue(
+              (imageHeight - innerWidth * scaleRef.value) / 2
+            );
+
+            Vue.watch(ctxRef, ctx => {
+              if (!ctx) return;
+              for (let i = 0; i < 5; i++) {
+                for (let j = 0; j < 9; j++) {
+                  loadImage(`./images/l4_0${i + 1}_0${j + 1}.jpg`).then(image => {
+                    offsetCtx.drawImage(image, 512 * j, 512 * i, image.width, image.height);
+                    render();
+                  });
+                }
+              }
+            });
+
+            function render() {
+              const ctx = ctxRef.value;
+              if (!ctx) return;
+              const offsetX = offsetXRef.value;
+              const offsetY = offsetYRef.value;
+              const scale = scaleRef.value;
+              ctx.clearRect(0, 0, innerWidth, innerHeight);
+              ctx.drawImage(
+                offsetCanvas,
+                offsetX,
+                offsetY,
+                innerWidth * scale,
+                innerHeight * scale,
+                0,
+                0,
+                innerWidth,
+                innerHeight
+              );
+            }
+
+            Vue.watchEffect(render);
+
+            function setOffset(x, y, scale) {
+              if (scale === undefined) {
+                offsetXRef.value = Math.min(imageWidth - innerWidth * scaleRef.value, Math.max(0, x));
+                offsetYRef.value = Math.min(imageHeight - innerHeight * scaleRef.value, Math.max(0, y));
+              } else {
+                offsetXTo(Math.min(imageWidth - innerWidth * scale, Math.max(0, x)));
+                offsetYTo(Math.min(imageHeight - innerHeight * scale, Math.max(0, y)));
+              }
+            }
+
+            const handleDragstart = e => {
+              if (e.touches?.length && e.touches.length > 1) return;
+              const clientX = e.clientX ?? e.touches[0].clientX;
+              const clientY = e.clientY ?? e.touches[0].clientY;
+              let prev = { clientX, clientY };
+              const handleDragmove = e => {
+                if (e.touches?.length && e.touches.length > 1) return;
+                e.preventDefault();
+                const clientX = e.clientX ?? e.touches[0].clientX;
+                const clientY = e.clientY ?? e.touches[0].clientY;
+                setOffset(
+                  offsetXRef.value + (prev.clientX - clientX) * scaleRef.value,
+                  offsetYRef.value + (prev.clientY - clientY) * scaleRef.value
+                );
+                prev.clientX = clientX;
+                prev.clientY = clientY;
+              };
+
+              const handledragend = () => {
+                document.removeEventListener('touchmove', handleDragmove);
+                document.removeEventListener('touchend', handledragend);
+                document.removeEventListener('mousemove', handleDragmove);
+                document.removeEventListener('mouseup', handledragend);
+              };
+              document.addEventListener('touchmove', handleDragmove, { passive: false });
+              document.addEventListener('touchend', handledragend);
+              document.addEventListener('mousemove', handleDragmove, { passive: false });
+              document.addEventListener('mouseup', handledragend);
+            };
+            // 拖拽
+            document.addEventListener('touchstart', handleDragstart);
+            document.addEventListener('mousedown', handleDragstart);
+
+            document.addEventListener(
+              'wheel',
+              e => {
+                e.preventDefault();
+                const originScale = scaleRef.value;
+                const newScale = Math.max(
+                  0.1,
+                  Math.min(maxScale, scaleRef.value * Math.pow(e.deltaY >= 0 ? 0.9 : 1.1, Math.abs(e.deltaY / 50)))
+                );
+                scaleTo(newScale);
+                setOffset(
+                  offsetXRef.value + e.clientX * (originScale - newScale),
+                  offsetYRef.value + e.clientY * (originScale - newScale),
+                  newScale
+                );
+              },
+              { passive: false }
+            );
+
+            function getDistance(start, stop) {
+              return Math.sqrt(Math.pow(Math.abs(start.x - stop.x), 2) + Math.pow(Math.abs(start.y - stop.y), 2));
+            }
+
+            // 两指缩放
+            document.addEventListener(
+              'touchstart',
+              e => {
+                const touches = e.touches;
+                if (touches.length <= 1) return;
+                e.preventDefault();
+                const events1 = touches[0];
+                const events2 = touches[1];
+
+                const clientX = (events1.pageX + events2.pageX) / 2;
+                const clientY = (events1.pageY + events2.pageY) / 2;
+
+                const firstDistance = getDistance(
+                  {
+                    x: events1.pageX,
+                    y: events1.pageY,
+                  },
+                  {
+                    x: events2.pageX,
+                    y: events2.pageY,
+                  }
+                );
+
+                const baseScale = scaleRef.value;
+                const handleScale = e => {
+                  e.preventDefault();
+                  const touches = e.touches;
+                  if (touches.length <= 1) return;
+                  const events1 = touches[0];
+                  const events2 = touches[1];
+
+                  const distance = getDistance(
+                    {
+                      x: events1.pageX,
+                      y: events1.pageY,
+                    },
+                    {
+                      x: events2.pageX,
+                      y: events2.pageY,
+                    }
+                  );
+                  const originScale = scaleRef.value;
+                  scaleRef.value = Math.max(
+                    0.1,
+                    Math.min(maxScale, baseScale * Math.pow(firstDistance / distance, 1 / 2))
+                  );
+                  setOffset(
+                    offsetXRef.value + clientX * (originScale - scaleRef.value),
+                    offsetYRef.value + clientY * (originScale - scaleRef.value)
+                  );
+                };
+
+                const handleScaleEnd = () => {
+                  document.removeEventListener('touchmove', handleScale, { passive: false });
+                  document.removeEventListener('touchend', handleScaleEnd);
+                };
+                document.addEventListener('touchmove', handleScale, { passive: false });
+                document.addEventListener('touchend', handleScaleEnd);
+              },
+              { passive: false }
+            );
+
+            return { canvasRef };
+          },
+          template: '<canvas ref="canvasRef" />',
+        })
+      ).mount('#root');
+    </script>
+  </body>
+</html>
